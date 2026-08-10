@@ -15,7 +15,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { make as makeUsageService } from "./UsageService.ts";
+import * as UsageService from "./UsageService.ts";
 
 /**
  * Two tiny documents so the rate table sizes are assertable: two LiteLLM
@@ -91,7 +91,7 @@ it.effect("keeps the models.dev overlay when only the LiteLLM table expires", ()
   const cwd = tempDir("usage-cwd");
 
   return Effect.gen(function* () {
-    const usage = yield* makeUsageService;
+    const usage = yield* UsageService.make;
 
     // First scan: LiteLLM loads, models.dev fails -> no overlay yet.
     const first = yield* usage.readSummary(INPUT);
