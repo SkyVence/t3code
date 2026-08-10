@@ -149,9 +149,16 @@ export const make = Effect.gen(function* () {
   const ratesCachePath = path.join(config.stateDir, "usage-model-rates.json");
   const openCodeRatesCachePath = path.join(config.stateDir, "usage-model-rates-modelsdev.json");
   const scanCachePath = path.join(config.stateDir, "usage-scan-cache.json");
-  let rates: RateTable = new Map();
+  let litellmRates: RateTable = new Map();
   let ratesFetchedAtMs: number | null = null;
   let ratesStatus: UsageSummary["pricing"]["status"] = "unavailable";
+  /**
+   * The models.dev go/zen overlay, kept apart from `litellmRates`. Either
+   * source may refresh on its own clock; the overlay is re-merged into the
+   * served table at read time so one source expiring can never evict the
+   * other's prices.
+   */
+  let openCodeRates: RateTable = new Map();
   let openCodeRatesFetchedAtMs: number | null = null;
 
   /**
@@ -171,7 +178,7 @@ export const make = Effect.gen(function* () {
       if (fromDisk !== null) {
         const parsed = parseRateTable(fromDisk.document);
         if (parsed.size > 0) {
-          rates = parsed;
+          litellmRates = parsed;
           ratesFetchedAtMs = fromDisk.fetchedAtMs;
           ratesStatus = "cached";
           if (now - fromDisk.fetchedAtMs < RATES_TTL_MS) return;
@@ -188,14 +195,14 @@ export const make = Effect.gen(function* () {
     if (fetched === null) {
       // The refresh failed; whatever we are serving is now past its TTL and
       // must not keep claiming to be fresh.
-      if (rates.size > 0) ratesStatus = "cached";
+      if (litellmRates.size > 0) ratesStatus = "cached";
       return;
     }
 
     const parsed = parseRateTable(fetched);
     if (parsed.size === 0) return;
 
-    rates = parsed;
+    litellmRates = parsed;
     ratesFetchedAtMs = now;
     ratesStatus = "fresh";
 
@@ -206,13 +213,16 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Loads OpenCode's go/zen rates from models.dev and merges them over the
-   * LiteLLM table.
+   * Loads OpenCode's go/zen rates from models.dev into the dedicated overlay
+   * table.
    *
    * Mirrors `ensureRates`: fresh copy preferred, then the on-disk snapshot,
    * and silence (rather than failure) when neither exists. models.dev keys its
    * entries by `providerID/modelID`, so go and zen prices for one model id stay
    * distinct. The same `RatesCacheFile` shape is reused under its own path.
+   *
+   * The overlay is merged over `litellmRates` at read time, so this function
+   * only needs to refresh its own table; it never touches `litellmRates`.
    */
   const ensureOpenCodeRates = Effect.fn("UsageService.ensureOpenCodeRates")(function* () {
     const now = yield* Clock.currentTimeMillis;
@@ -226,7 +236,7 @@ export const make = Effect.gen(function* () {
       if (fromDisk !== null) {
         const parsed = parseOpenCodeRates(fromDisk.document);
         if (parsed.size > 0) {
-          rates = mergeRateTables(rates, parsed);
+          openCodeRates = parsed;
           openCodeRatesFetchedAtMs = fromDisk.fetchedAtMs;
           if (now - fromDisk.fetchedAtMs < RATES_TTL_MS) return;
         }
@@ -244,7 +254,7 @@ export const make = Effect.gen(function* () {
     const parsed = parseOpenCodeRates(fetched);
     if (parsed.size === 0) return;
 
-    rates = mergeRateTables(rates, parsed);
+    openCodeRates = parsed;
     openCodeRatesFetchedAtMs = now;
 
     yield* encodeRatesCache({ fetchedAtMs: now, document: fetched }).pipe(
@@ -429,11 +439,16 @@ export const make = Effect.gen(function* () {
     }
     const windowStartMs = DateTime.toEpochMillis(windowStart.value) - MTIME_SLACK_MS;
 
+    // Always re-compose the served table, regardless of which source refreshed
+    // this pass: a LiteLLM refresh on its own clock must not drop the still
+    // valid OpenCode go/zen overlay (and vice versa).
+    const servedRates = mergeRateTables(litellmRates, openCodeRates);
+
     const aggregator = new UsageAggregator({
       timeZone: input.timeZone,
       sinceDay: input.sinceDay,
       untilDay: input.untilDay,
-      rates,
+      rates: servedRates,
     });
 
     const sources: UsageSource[] = [];
@@ -528,7 +543,7 @@ export const make = Effect.gen(function* () {
           ratesFetchedAtMs === null
             ? null
             : DateTime.formatIso(DateTime.makeUnsafe(ratesFetchedAtMs)),
-        knownModels: rates.size,
+        knownModels: servedRates.size,
       },
       scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
     } satisfies UsageSummary;
