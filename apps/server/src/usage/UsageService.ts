@@ -34,15 +34,25 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
+import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
-import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
+  mergeRateTables,
+  parseOpenCodeRates,
+  parseRateTable,
+  type RateTable,
+} from "./usagePricing.ts";
+import {
+  listOpenCodeDatabaseFiles,
   listTranscriptFiles,
   readDirectoryVolumeId,
   readTranscriptRecords,
+  type OpenCodeStoreFile,
+  type OpenCodeWalIdentity,
 } from "./usageTranscriptReader.ts";
 import {
   decodeScanCache,
@@ -56,8 +66,18 @@ import type { UsageRecord } from "./usageTranscripts.ts";
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
+/**
+ * Source of OpenCode's go/zen model prices. models.dev publishes a different
+ * document layout to LiteLLM (per-million-token `cost` on each model), so it is
+ * fetched and parsed separately and merged over the LiteLLM table.
+ */
+const MODELS_DEV_URL = "https://models.dev/api.json";
+
 /** Rates move rarely; a day-old table keeps the page working offline. */
 const RATES_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Combined label for where the served rate table came from. */
+const PRICING_SOURCE_LABEL = "LiteLLM + models.dev (opencode go/zen)";
 
 /**
  * Files are filtered by mtime before opening. The slack covers a session whose
@@ -107,7 +127,7 @@ export const layerTest = Layer.succeed(
         sources: [],
         pricing: {
           status: "unavailable",
-          source: LITELLM_RATES_URL,
+          source: PRICING_SOURCE_LABEL,
           fetchedAt: null,
           knownModels: 0,
         },
@@ -127,10 +147,12 @@ export const make = Effect.gen(function* () {
   let cacheDirty = false;
 
   const ratesCachePath = path.join(config.stateDir, "usage-model-rates.json");
+  const openCodeRatesCachePath = path.join(config.stateDir, "usage-model-rates-modelsdev.json");
   const scanCachePath = path.join(config.stateDir, "usage-scan-cache.json");
   let rates: RateTable = new Map();
   let ratesFetchedAtMs: number | null = null;
   let ratesStatus: UsageSummary["pricing"]["status"] = "unavailable";
+  let openCodeRatesFetchedAtMs: number | null = null;
 
   /**
    * Loads the LiteLLM rate table, preferring a fresh copy and falling back to
@@ -184,6 +206,56 @@ export const make = Effect.gen(function* () {
   });
 
   /**
+   * Loads OpenCode's go/zen rates from models.dev and merges them over the
+   * LiteLLM table.
+   *
+   * Mirrors `ensureRates`: fresh copy preferred, then the on-disk snapshot,
+   * and silence (rather than failure) when neither exists. models.dev keys its
+   * entries by `providerID/modelID`, so go and zen prices for one model id stay
+   * distinct. The same `RatesCacheFile` shape is reused under its own path.
+   */
+  const ensureOpenCodeRates = Effect.fn("UsageService.ensureOpenCodeRates")(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    if (openCodeRatesFetchedAtMs !== null && now - openCodeRatesFetchedAtMs < RATES_TTL_MS) return;
+
+    if (openCodeRatesFetchedAtMs === null) {
+      const fromDisk = yield* fileSystem.readFileString(openCodeRatesCachePath).pipe(
+        Effect.flatMap((raw) => decodeRatesCache(raw)),
+        Effect.catchCause(() => Effect.succeed(null)),
+      );
+      if (fromDisk !== null) {
+        const parsed = parseOpenCodeRates(fromDisk.document);
+        if (parsed.size > 0) {
+          rates = mergeRateTables(rates, parsed);
+          openCodeRatesFetchedAtMs = fromDisk.fetchedAtMs;
+          if (now - fromDisk.fetchedAtMs < RATES_TTL_MS) return;
+        }
+      }
+    }
+
+    const fetched = yield* httpClient.get(MODELS_DEV_URL).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.json),
+      Effect.timeout(10_000),
+      Effect.catchCause(() => Effect.succeed(null)),
+    );
+    if (fetched === null) return;
+
+    const parsed = parseOpenCodeRates(fetched);
+    if (parsed.size === 0) return;
+
+    rates = mergeRateTables(rates, parsed);
+    openCodeRatesFetchedAtMs = now;
+
+    yield* encodeRatesCache({ fetchedAtMs: now, document: fetched }).pipe(
+      Effect.flatMap((serialized) =>
+        fileSystem.writeFileString(openCodeRatesCachePath, serialized),
+      ),
+      Effect.catchCause(() => Effect.void),
+    );
+  });
+
+  /**
    * Claude's config dir is the home itself when overridden, but a default
    * install nests transcripts under `~/.claude/projects`. Probe both.
    */
@@ -195,6 +267,30 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
       return nestedExists ? nested : path.join(homePath, "projects");
     });
+
+  /**
+   * OpenCode's session store directory, mirroring the CLI's own resolution:
+   * an explicit `OPENCODE_DATA_DIR` wins, then the XDG data home, then the
+   * platform default (`~/.local/share/opencode`, or `~/Library/Application
+   * Support/opencode` on macOS).
+   */
+  const resolveOpenCodeDataDir = Effect.fn("UsageService.resolveOpenCodeDataDir")(function* () {
+    const env = yield* HostProcessEnvironment;
+    const platform = yield* HostProcessPlatform;
+
+    const fromEnv = env.OPENCODE_DATA_DIR;
+    if (fromEnv !== undefined && fromEnv.trim().length > 0) {
+      return path.resolve(expandHomePath(fromEnv));
+    }
+    const xdgDataHome = env.XDG_DATA_HOME;
+    if (xdgDataHome !== undefined && xdgDataHome.trim().length > 0) {
+      return path.join(path.resolve(expandHomePath(xdgDataHome)), "opencode");
+    }
+    if (platform === "darwin") {
+      return path.join(NodeOS.homedir(), "Library", "Application Support", "opencode");
+    }
+    return path.join(NodeOS.homedir(), ".local", "share", "opencode");
+  });
 
   /** Resolves the transcript directory for each provider. */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* () {
@@ -221,6 +317,7 @@ export const make = Effect.gen(function* () {
     return [
       { provider: "claude" as const, dir: claudeDir },
       { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
+      { provider: "opencode" as const, dir: yield* resolveOpenCodeDataDir() },
     ];
   });
 
@@ -256,22 +353,33 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  /** Parses one transcript, reusing the cached result when it is unchanged. */
+  /**
+   * Parses one transcript, reusing the cached result when it is unchanged.
+   *
+   * OpenCode's store runs in WAL mode, so its live tail is the sidecar WAL
+   * file: a hit is only valid when that is unchanged too, or a session written
+   * since the last checkpoint would keep serving stale usage.
+   */
   const readFileRecords = (
     filePath: string,
     size: number,
     mtimeMs: number,
     provider: UsageProviderKind,
+    wal: OpenCodeWalIdentity | null,
   ): Effect.Effect<readonly UsageRecord[]> =>
     Effect.gen(function* () {
       const cached = fileCache.get(filePath);
       // Provider is part of the identity: if both providers were ever pointed
       // at one directory, a hit parsed by the other parser must not be reused.
+      const walMatches =
+        (cached?.wal?.size ?? null) === (wal?.size ?? null) &&
+        (cached?.wal?.mtimeMs ?? null) === (wal?.mtimeMs ?? null);
       if (
         cached &&
         cached.size === size &&
         cached.mtimeMs === mtimeMs &&
-        cached.provider === provider
+        cached.provider === provider &&
+        walMatches
       ) {
         return cached.records;
       }
@@ -284,7 +392,13 @@ export const make = Effect.gen(function* () {
       // duplicates. The aggregator still runs the cross-file dedupe pass.
       const records = dedupeWithinFile(parsed);
 
-      fileCache.set(filePath, { size, mtimeMs, provider, records });
+      fileCache.set(filePath, {
+        size,
+        mtimeMs,
+        provider,
+        records,
+        ...(wal === null ? {} : { wal }),
+      });
       cacheDirty = true;
       return records;
     });
@@ -299,6 +413,7 @@ export const make = Effect.gen(function* () {
 
     const startedAtMs = yield* Clock.currentTimeMillis;
     yield* ensureRates();
+    yield* ensureOpenCodeRates();
     yield* ensureScanCacheLoaded;
 
     const hostId = NodeOS.hostname();
@@ -345,7 +460,11 @@ export const make = Effect.gen(function* () {
       }
 
       walkedRoots.push(dir);
-      const files = yield* Effect.promise(() => listTranscriptFiles(dir, windowStartMs));
+      const files = yield* Effect.promise(() =>
+        provider === "opencode"
+          ? listOpenCodeDatabaseFiles(dir, windowStartMs)
+          : listTranscriptFiles(dir, windowStartMs),
+      );
       let scannedFiles = 0;
       let skippedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
@@ -354,7 +473,8 @@ export const make = Effect.gen(function* () {
 
       for (const file of files) {
         livePaths.add(file.path);
-        const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
+        const wal = provider === "opencode" ? (file as OpenCodeStoreFile).wal : null;
+        const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider, wal);
         if (records.length === 0) {
           skippedFiles += 1;
           continue;
@@ -403,7 +523,7 @@ export const make = Effect.gen(function* () {
       sources,
       pricing: {
         status: ratesStatus,
-        source: LITELLM_RATES_URL,
+        source: PRICING_SOURCE_LABEL,
         fetchedAt:
           ratesFetchedAtMs === null
             ? null
