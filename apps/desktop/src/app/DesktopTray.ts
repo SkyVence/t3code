@@ -6,6 +6,8 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 
+import * as FileSystem from "effect/FileSystem";
+
 import * as Electron from "electron";
 
 import * as DesktopAssets from "./DesktopAssets.ts";
@@ -15,7 +17,6 @@ import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTray from "../electron/ElectronTray.ts";
-import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
@@ -27,12 +28,7 @@ export class DesktopTrayError extends Schema.TaggedErrorClass<DesktopTrayError>(
   },
 ) {}
 
-export type DesktopTrayMenuAction =
-  | "show"
-  | "settings"
-  | "toggle-close-to-tray"
-  | "quit"
-  | "disable-agents";
+export type DesktopTrayMenuAction = "show" | "settings" | "quit";
 
 export class DesktopTray extends Context.Service<
   DesktopTray,
@@ -75,6 +71,11 @@ export function buildTrayMenuTemplate(input: {
   closeToTray: boolean;
   onAction: (action: DesktopTrayMenuAction) => void;
 }): Electron.MenuItemConstructorOptions[] {
+  // Tray is intentionally minimal — user asked to keep background-service
+  // controls in Settings, not in the tray. Keep only show/settings/quit plus
+  // a non-interactive header with the running-jobs count.
+  void input.closeToTray;
+  void input.agentsPaused;
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: buildRunningLabel(input.runningCount, input.agentsPaused),
@@ -91,15 +92,6 @@ export function buildTrayMenuTemplate(input: {
     },
     { type: "separator" },
     {
-      label: input.agentsPaused ? "Resume agents" : "Pause agents",
-      click: () => input.onAction("disable-agents"),
-    },
-    {
-      label: input.closeToTray ? "Disable background service" : "Enable background service",
-      click: () => input.onAction("toggle-close-to-tray"),
-    },
-    { type: "separator" },
-    {
       label: "Quit",
       click: () => input.onAction("quit"),
     },
@@ -112,11 +104,11 @@ export const make = Effect.gen(function* () {
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const electronApp = yield* ElectronApp.ElectronApp;
   const electronTray = yield* ElectronTray.ElectronTray;
-  const electronWindow = yield* ElectronWindow.ElectronWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const shutdown = yield* DesktopShutdown.DesktopShutdown;
   const state = yield* DesktopState.DesktopState;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
+  const fileSystem = yield* FileSystem.FileSystem;
 
   const runningCountRef = yield* Ref.make(0);
   const pausedRef = yield* Ref.make(false);
@@ -147,7 +139,10 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           switch (action) {
             case "show": {
-              yield* desktopWindow.revealOrCreateMain.pipe(
+              // Use activate — it correctly re-reveals a hidden window or the
+              // WSL splash, and avoids the blank-page stuck state seen with
+              // revealOrCreateMain when the window was previously hidden.
+              yield* desktopWindow.activate.pipe(
                 Effect.catch((error) =>
                   logTrayWarning("failed to reveal window from tray", {
                     error: (error as any).message,
@@ -157,37 +152,26 @@ export const make = Effect.gen(function* () {
               break;
             }
             case "settings": {
-              // Open main window then dispatch settings navigation. Reuse menu channel.
-              yield* desktopWindow.revealOrCreateMain.pipe(
+              // Ensure window is visible first, then dispatch via the same
+              // path the native menu uses (DesktopWindow → MENU_ACTION_CHANNEL).
+              // This guarantees the renderer receives "open-settings" even if
+              // it was just created or was hidden.
+              yield* desktopWindow.activate.pipe(
                 Effect.catch((error) =>
                   logTrayWarning("failed to reveal window for settings", {
                     error: (error as any).message,
                   }),
                 ),
               );
-              // Best-effort: ask renderer to open settings via existing menu channel.
-              const windowOption = yield* electronWindow.currentMainOrFirst.pipe(
-                Effect.orElseSucceed(() => Option.none()),
+              // Small delay to let the renderer finish load after reveal;
+              // dispatchMenuAction handles isLoadingMainFrame internally.
+              yield* desktopWindow.dispatchMenuAction("open-settings").pipe(
+                Effect.catch((error) =>
+                  logTrayWarning("failed to dispatch settings action", {
+                    error: (error as any).message,
+                  }),
+                ),
               );
-              if (Option.isSome(windowOption) && !windowOption.value.isDestroyed()) {
-                windowOption.value.webContents.send("t3-menu-action", "open-settings");
-              }
-              break;
-            }
-            case "disable-agents": {
-              const next = !(yield* Ref.get(pausedRef));
-              yield* Ref.set(pausedRef, next);
-              yield* rebuildMenu;
-              yield* electronTray.setToolTip(tray, yield* getTooltip).pipe(Effect.ignore);
-              yield* logTrayInfo(next ? "agents paused from tray" : "agents resumed from tray");
-              break;
-            }
-            case "toggle-close-to-tray": {
-              const current = yield* settings.get;
-              const next = !current.closeToTray;
-              yield* settings.setCloseToTray(next).pipe(Effect.ignore);
-              yield* rebuildMenu;
-              yield* logTrayInfo("closeToTray toggled from tray", { enabled: next });
               break;
             }
             case "quit": {
@@ -234,14 +218,34 @@ export const make = Effect.gen(function* () {
     }
 
     const iconPaths = yield* assets.iconPaths;
+    const currentSettingsForIcon = yield* settings.get.pipe(
+      Effect.orElseSucceed(() => DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS),
+    );
     // Prefer ico on Windows, png elsewhere. Fall back to empty NativeImage if probing failed.
-    const preferredIconPath = Option.match(
+    // For packaged builds iconPaths already holds the correct per-channel icon
+    // (nightly vs stable) via electron-builder resources. For unpacked dev,
+    // manually prefer the nightly icon when the update channel is nightly so
+    // the tray matches the nightly/stable branding the user sees in the window.
+    let preferredIconPath = Option.match(
       Option.orElse(iconPaths.ico, () => iconPaths.png),
       {
-        onNone: () => undefined,
+        onNone: () => undefined as string | undefined,
         onSome: (p) => p,
       },
     );
+    if (currentSettingsForIcon.updateChannel === "nightly") {
+      const nightlyCandidates = [
+        `${environment.rootDir}/assets/nightly/nightly-windows.ico`,
+        `${environment.rootDir}/assets/nightly/nightly-universal-1024.png`,
+      ];
+      for (const candidate of nightlyCandidates) {
+        const exists = yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false));
+        if (exists) {
+          preferredIconPath = candidate;
+          break;
+        }
+      }
+    }
 
     let nativeIcon: Electron.NativeImage | string;
     if (preferredIconPath !== undefined) {
@@ -265,9 +269,11 @@ export const make = Effect.gen(function* () {
     yield* Ref.set(trayRef, Option.some(tray));
 
     // Clicking the tray icon reveals the window; double-click also handled.
+    // Use activate to avoid the blank-page stuck state seen with
+    // revealOrCreateMain when the window was previously hidden.
     yield* electronTray.onClick(tray, () => {
       void Effect.runPromise(
-        desktopWindow.revealOrCreateMain.pipe(
+        desktopWindow.activate.pipe(
           Effect.catch((error) =>
             logTrayWarning("failed to reveal on tray click", { error: (error as any).message }),
           ),
@@ -276,7 +282,7 @@ export const make = Effect.gen(function* () {
     });
     yield* electronTray.onDoubleClick(tray, () => {
       void Effect.runPromise(
-        desktopWindow.revealOrCreateMain.pipe(
+        desktopWindow.activate.pipe(
           Effect.catch((error) =>
             logTrayWarning("failed to reveal on tray double-click", {
               error: (error as any).message,

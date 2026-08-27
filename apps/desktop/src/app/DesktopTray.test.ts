@@ -3,7 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as DesktopTray from "./DesktopTray.ts";
 
 describe("DesktopTray", () => {
-  it("builds menu with idle label and enable background when closeToTray false", () => {
+  it("builds menu with idle label", () => {
     const actions: DesktopTray.DesktopTrayMenuAction[] = [];
     const template = DesktopTray.buildTrayMenuTemplate({
       runningCount: 0,
@@ -12,15 +12,14 @@ describe("DesktopTray", () => {
       onAction: (a) => actions.push(a),
     });
     assert.equal(template[0]?.label, "No agents running");
-    assert.isTrue(
-      template.some((item) => item.label === "Enable background service"),
-      "should show Enable when disabled",
-    );
     assert.isTrue(template.some((item) => item.label === "Show T3 Code"));
+    assert.isTrue(template.some((item) => item.label === "Settings"));
     assert.isTrue(template.some((item) => item.label === "Quit"));
+    assert.isFalse(template.some((item) => item.label === "Pause agents"));
+    assert.isFalse(template.some((item) => item.label === "Enable background service"));
   });
 
-  it("shows running count and pause toggle", () => {
+  it("shows running count", () => {
     const template = DesktopTray.buildTrayMenuTemplate({
       runningCount: 3,
       agentsPaused: false,
@@ -28,8 +27,6 @@ describe("DesktopTray", () => {
       onAction: () => undefined,
     });
     assert.equal(template[0]?.label, "3 agents running");
-    assert.isTrue(template.some((item) => item.label === "Pause agents"));
-    assert.isTrue(template.some((item) => item.label === "Disable background service"));
   });
 
   it("shows paused state", () => {
@@ -40,7 +37,6 @@ describe("DesktopTray", () => {
       onAction: () => undefined,
     });
     assert.equal(template[0]?.label, "Agents paused");
-    assert.isTrue(template.some((item) => item.label === "Resume agents"));
   });
 
   it("fires onAction for show and quit", () => {

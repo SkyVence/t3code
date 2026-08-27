@@ -1145,6 +1145,11 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  getTraySettings?: () => Promise<{ closeToTray: boolean; minimizeToTray: boolean }>;
+  setCloseToTray?: (enabled: boolean) => Promise<{ closeToTray: boolean; minimizeToTray: boolean }>;
+  setMinimizeToTray?: (
+    enabled: boolean,
+  ) => Promise<{ closeToTray: boolean; minimizeToTray: boolean }>;
   /**
    * Desktop-only preview surface. Present iff the renderer is hosted by the
    * Electron desktop build; web builds have `preview === undefined`.
