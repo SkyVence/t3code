@@ -130,13 +130,7 @@ export const make = Effect.gen(function* () {
       // forwarded to the running app. In a secondary instance the bridge has
       // already begun quitting the app; app.quit() is asynchronous, so stop
       // bootstrap here before whenReady can fire.
-      // Test bypass for parallel tray verification alongside nightly — set
-      // T3_TRAY_TEST_BYPASS=1 to keep the second instance alive. Do not use
-      // in production; it would break OAuth forwarding.
-      if (
-        process.env.T3_TRAY_TEST_BYPASS !== "1" &&
-        !(bridge as unknown as { isPrimaryInstance: boolean }).isPrimaryInstance
-      ) {
+      if (!bridge.isPrimaryInstance) {
         yield* electronApp.quit;
         return yield* Effect.interrupt;
       }

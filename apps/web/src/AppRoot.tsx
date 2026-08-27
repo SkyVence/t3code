@@ -7,16 +7,16 @@ import { useTrayRunningCountSync } from "./hooks/useTrayRunningCountSync";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
 
-/**
- * Owns renderer-wide providers. The Electron browser host intentionally sits
- * outside the router so its webviews survive route transitions, but it must
- * share the same atom registry as routed UI.
- */
 function TrayRunningCountSync() {
   useTrayRunningCountSync();
   return null;
 }
 
+/**
+ * Owns renderer-wide providers. The Electron browser host intentionally sits
+ * outside the router so its webviews survive route transitions, but it must
+ * share the same atom registry as routed UI.
+ */
 export function AppRoot({ router }: { readonly router: AppRouter }) {
   return (
     <AppAtomRegistryProvider>

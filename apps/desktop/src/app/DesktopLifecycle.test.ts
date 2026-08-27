@@ -146,6 +146,62 @@ describe("DesktopLifecycle", () => {
     });
   }
 
+  for (const testCase of [
+    { platform: "win32", closeToTray: true, expectQuit: false },
+    { platform: "win32", closeToTray: false, expectQuit: true },
+    { platform: "linux", closeToTray: true, expectQuit: true },
+  ] satisfies ReadonlyArray<{
+    platform: NodeJS.Platform;
+    closeToTray: boolean;
+    expectQuit: boolean;
+  }>) {
+    it.effect(
+      `window-all-closed ${testCase.expectQuit ? "quits" : "stays alive for the tray"} on ${testCase.platform} with closeToTray=${String(testCase.closeToTray)}`,
+      () =>
+        Effect.gen(function* () {
+          const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
+          let quitCount = 0;
+          const quit = Effect.sync(() => {
+            quitCount += 1;
+          });
+          const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+            platform: testCase.platform,
+            isDevelopment: false,
+          } as DesktopEnvironment.DesktopEnvironment["Service"]);
+          const layer = DesktopLifecycle.layer.pipe(
+            Layer.provideMerge(makeElectronAppLayer(appListeners, quit)),
+            Layer.provideMerge(electronThemeLayer),
+            Layer.provideMerge(makeElectronWindowLayer()),
+            Layer.provideMerge(makeDesktopWindowLayer()),
+            Layer.provideMerge(environmentLayer),
+            Layer.provideMerge(DesktopShutdown.layer),
+            Layer.provideMerge(DesktopState.layer),
+            Layer.provideMerge(
+              DesktopAppSettings.layerTest({
+                ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+                closeToTray: testCase.closeToTray,
+              }),
+            ),
+          );
+
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+              yield* lifecycle.register;
+
+              appListeners.get("window-all-closed")?.();
+              // The handler is a forked promise over synchronous mocks; one
+              // macrotask boundary flushes it deterministically (a scheduler
+              // flush, not a timed wait).
+              yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
+
+              assert.equal(quitCount, testCase.expectQuit ? 1 : 0);
+            }),
+          ).pipe(Effect.provide(layer));
+        }),
+    );
+  }
+
   it.effect("destroys windows before waiting for backend shutdown", () =>
     Effect.gen(function* () {
       const appListeners = new Map<string, (...args: readonly unknown[]) => void>();

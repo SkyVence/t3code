@@ -90,6 +90,9 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   wslBackendEnabled: false,
   wslDistro: null,
   wslOnly: false,
+  // The tray background service is Windows-only. The flag defaults on but is
+  // inert elsewhere: DesktopWindow's hide-on-close, DesktopLifecycle's quit
+  // suppression, and the settings UI all gate on win32.
   closeToTray: true,
   minimizeToTray: false,
 };

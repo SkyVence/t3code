@@ -6,6 +6,7 @@ import { useEffect } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import { isWindowsPlatform } from "../lib/utils";
 import { environmentThreadShells } from "../state/threads";
 
 /**
@@ -51,8 +52,12 @@ const DISABLED_COUNT_ATOM = Atom.make(0).pipe(Atom.withLabel("tray-local-running
 
 // Resolved once at import time; the preload script injects the bridge before
 // app scripts run, so this never appears later. `undefined` on the web build.
+// The tray itself is Windows-only, so skip the sync (and its thread-state
+// subscription) on desktop hosts that expose the bridge but show no tray.
 const setTrayRunningCount =
-  typeof window === "undefined" ? undefined : window.desktopBridge?.setTrayRunningCount;
+  typeof window !== "undefined" && isWindowsPlatform(window.navigator.platform)
+    ? window.desktopBridge?.setTrayRunningCount
+    : undefined;
 
 /**
  * Syncs the count of running local agents to the desktop tray (Windows).

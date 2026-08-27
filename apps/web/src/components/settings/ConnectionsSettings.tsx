@@ -37,7 +37,7 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { cn } from "../../lib/utils";
+import { cn, isWindowsPlatform } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 import {
@@ -1747,13 +1747,18 @@ function CloudRemoteEnvironmentRows({
  * Windows tray behavior for the desktop-hosted backend. Lives with the other
  * "This environment" backend controls (network access, WSL) because it decides
  * whether closing the window keeps the local server and its agents running.
- * Hidden when the host bridge has no tray support (web, older desktops).
+ * Windows-only: the preload withholds the tray bridge methods elsewhere, and
+ * the platform check below covers older desktop hosts that still expose them.
+ * Like the WSL/Tailscale rows, nothing renders until the persisted state
+ * loads, so the switches never show a default that then visibly flips.
  */
 function DesktopTrayRows() {
   const [traySettings, setTraySettings] = useState<{
     closeToTray: boolean;
     minimizeToTray: boolean;
   } | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const hasTrayBridge =
     typeof window !== "undefined" && typeof window.desktopBridge?.getTraySettings === "function";
 
@@ -1767,26 +1772,40 @@ function DesktopTrayRows() {
       .catch(() => undefined);
   }, [hasTrayBridge]);
 
-  if (!hasTrayBridge) return null;
+  const applyTraySetting = useCallback(
+    (apply: () => Promise<{ closeToTray: boolean; minimizeToTray: boolean }>) => {
+      setIsUpdating(true);
+      setUpdateError(null);
+      apply()
+        .then((next) => setTraySettings(next))
+        .catch((error: unknown) => {
+          setUpdateError(
+            error instanceof Error ? error.message : "Failed to update tray settings.",
+          );
+        })
+        .finally(() => setIsUpdating(false));
+    },
+    [],
+  );
 
-  const closeToTray = traySettings?.closeToTray ?? true;
-  const minimizeToTray = traySettings?.minimizeToTray ?? false;
+  if (!hasTrayBridge || !isWindowsPlatform(navigator.platform) || traySettings === null) {
+    return null;
+  }
 
   return (
     <>
       <SettingsRow
         title="Keep in system tray on close"
-        description="On Windows, closing the window hides T3 Code to the hidden icons (system tray) and keeps agents running. Disable to quit on close."
+        description="Closing the window hides T3 Code to the hidden icons (system tray) and keeps agents running. Disable to quit on close."
+        status={updateError ? <span className="block text-destructive">{updateError}</span> : null}
         control={
           <Switch
-            checked={closeToTray}
+            checked={traySettings.closeToTray}
+            disabled={isUpdating}
             onCheckedChange={(checked) => {
-              const bridge = window.desktopBridge;
-              if (!bridge?.setCloseToTray) return;
-              void bridge
-                .setCloseToTray(Boolean(checked))
-                .then((next) => setTraySettings(next))
-                .catch(() => undefined);
+              const setCloseToTray = window.desktopBridge?.setCloseToTray;
+              if (!setCloseToTray) return;
+              applyTraySetting(() => setCloseToTray(Boolean(checked)));
             }}
             aria-label="Keep in system tray on close"
           />
@@ -1794,17 +1813,15 @@ function DesktopTrayRows() {
       />
       <SettingsRow
         title="Minimize to tray"
-        description="On Windows, minimizing also hides to the tray."
+        description="Minimizing also hides to the tray."
         control={
           <Switch
-            checked={minimizeToTray}
+            checked={traySettings.minimizeToTray}
+            disabled={isUpdating}
             onCheckedChange={(checked) => {
-              const bridge = window.desktopBridge;
-              if (!bridge?.setMinimizeToTray) return;
-              void bridge
-                .setMinimizeToTray(Boolean(checked))
-                .then((next) => setTraySettings(next))
-                .catch(() => undefined);
+              const setMinimizeToTray = window.desktopBridge?.setMinimizeToTray;
+              if (!setMinimizeToTray) return;
+              applyTraySetting(() => setMinimizeToTray(Boolean(checked)));
             }}
             aria-label="Minimize to tray"
           />

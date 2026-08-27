@@ -279,20 +279,24 @@ const startup = Effect.gen(function* () {
     Effect.catchCause((cause) => fatalStartupCause("whenReady", cause)),
   );
   yield* logStartupInfo("app ready");
-  // Register system tray after app is ready — Tray requires a ready app on Windows.
+  // Register system tray after app is ready — Tray requires a ready app on
+  // Windows. The tray background service is Windows-only: macOS/Linux keep
+  // their existing lifecycle (no hidden-icons tray, quit on last window).
   // Best-effort: tray failures must not take down startup. ForkScoped ties the
   // tray's scope to the app's scopedProgram lifetime (until DesktopShutdown),
   // so the icon stays alive; do not wrap with Effect.scoped which would close
   // the scope right after register and destroy the tray.
-  yield* tray.register.pipe(
-    Effect.catch((error) =>
-      logStartupInfo("tray registration failed; continuing without tray", {
-        error: (error as any).message ?? String(error),
-      }),
-    ),
-    Effect.forkScoped,
-    Effect.asVoid,
-  );
+  if (environment.platform === "win32") {
+    yield* tray.register.pipe(
+      Effect.catch((error) =>
+        logStartupInfo("tray registration failed; continuing without tray", {
+          error: error.message,
+        }),
+      ),
+      Effect.forkScoped,
+      Effect.asVoid,
+    );
+  }
   if (environment.platform === "linux") {
     const selectedBackend = yield* safeStorage.selectedStorageBackend;
     yield* logStartupInfo("safe storage ready", {

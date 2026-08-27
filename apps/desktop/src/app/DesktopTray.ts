@@ -23,10 +23,13 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 export class DesktopTrayError extends Schema.TaggedErrorClass<DesktopTrayError>()(
   "DesktopTrayError",
   {
-    reason: Schema.String,
     cause: Schema.Defect(),
   },
-) {}
+) {
+  override get message(): string {
+    return "Failed to create the desktop system tray icon.";
+  }
+}
 
 export type DesktopTrayMenuAction = "show" | "settings" | "quit";
 
@@ -110,15 +113,15 @@ export const make = Effect.gen(function* () {
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
   const fileSystem = yield* FileSystem.FileSystem;
 
+  // Electron callbacks (menu clicks, tray clicks) re-enter the Effect world;
+  // run them with the captured fiber context so logging/tracing stay wired to
+  // the app runtime instead of the defaults.
+  const context = yield* Effect.context<never>();
+  const runPromise = Effect.runPromiseWith(context);
+
   const runningCountRef = yield* Ref.make(0);
   const pausedRef = yield* Ref.make(false);
   const trayRef = yield* Ref.make<Option.Option<Electron.Tray>>(Option.none());
-
-  const getTooltip = Effect.gen(function* () {
-    const count = yield* Ref.get(runningCountRef);
-    const paused = yield* Ref.get(pausedRef);
-    return buildTrayTooltip({ displayName: environment.displayName, runningCount: count, paused });
-  });
 
   const rebuildMenu = Effect.gen(function* () {
     const trayOption = yield* Ref.get(trayRef);
@@ -135,7 +138,7 @@ export const make = Effect.gen(function* () {
 
     const onAction = (action: DesktopTrayMenuAction): void => {
       // Fire-and-forget to avoid blocking the menu click handler.
-      void Effect.runPromise(
+      void runPromise(
         Effect.gen(function* () {
           switch (action) {
             case "show": {
@@ -145,7 +148,7 @@ export const make = Effect.gen(function* () {
               yield* desktopWindow.activate.pipe(
                 Effect.catch((error) =>
                   logTrayWarning("failed to reveal window from tray", {
-                    error: (error as any).message,
+                    error: error.message,
                   }),
                 ),
               );
@@ -159,7 +162,7 @@ export const make = Effect.gen(function* () {
               yield* desktopWindow.activate.pipe(
                 Effect.catch((error) =>
                   logTrayWarning("failed to reveal window for settings", {
-                    error: (error as any).message,
+                    error: error.message,
                   }),
                 ),
               );
@@ -168,7 +171,7 @@ export const make = Effect.gen(function* () {
               yield* desktopWindow.dispatchMenuAction("open-settings").pipe(
                 Effect.catch((error) =>
                   logTrayWarning("failed to dispatch settings action", {
-                    error: (error as any).message,
+                    error: error.message,
                   }),
                 ),
               );
@@ -264,7 +267,7 @@ export const make = Effect.gen(function* () {
 
     const tray = yield* electronTray
       .create(nativeIcon)
-      .pipe(Effect.mapError((cause) => new DesktopTrayError({ reason: "tray-create", cause })));
+      .pipe(Effect.mapError((cause) => new DesktopTrayError({ cause })));
 
     yield* Ref.set(trayRef, Option.some(tray));
 
@@ -272,20 +275,20 @@ export const make = Effect.gen(function* () {
     // Use activate to avoid the blank-page stuck state seen with
     // revealOrCreateMain when the window was previously hidden.
     yield* electronTray.onClick(tray, () => {
-      void Effect.runPromise(
+      void runPromise(
         desktopWindow.activate.pipe(
           Effect.catch((error) =>
-            logTrayWarning("failed to reveal on tray click", { error: (error as any).message }),
+            logTrayWarning("failed to reveal on tray click", { error: error.message }),
           ),
         ),
       );
     });
     yield* electronTray.onDoubleClick(tray, () => {
-      void Effect.runPromise(
+      void runPromise(
         desktopWindow.activate.pipe(
           Effect.catch((error) =>
             logTrayWarning("failed to reveal on tray double-click", {
-              error: (error as any).message,
+              error: error.message,
             }),
           ),
         ),

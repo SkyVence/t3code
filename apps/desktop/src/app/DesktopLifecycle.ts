@@ -43,7 +43,7 @@ type DesktopLifecycleRegistrationServices =
   | ElectronWindow.ElectronWindow;
 
 /**
- * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
+ * @effect-expect-leaking DesktopAppSettings | DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
  */
 export class DesktopLifecycle extends Context.Service<
   DesktopLifecycle,
@@ -243,9 +243,11 @@ export const make = DesktopLifecycle.of({
             // When background service (closeToTray) is enabled, keep the app alive
             // in the tray even after the last window closes — this is the
             // expected Windows hidden-icons behavior. Without it, closing the
-            // window would kill all running agents.
+            // window would kill all running agents. Windows-only: elsewhere the
+            // window handlers destroy on close (DesktopWindow.shouldHideOnClose
+            // is win32-gated), so suppressing quit would strand a windowless app.
             const currentSettings = yield* settings.get;
-            if (currentSettings.closeToTray) {
+            if (environment.platform === "win32" && currentSettings.closeToTray) {
               yield* logLifecycleInfo("window-all-closed suppressed by closeToTray");
               return;
             }

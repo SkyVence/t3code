@@ -1558,10 +1558,9 @@ export const TurnCountRange = Schema.Struct({
   Schema.makeFilter(
     (input) =>
       input.fromTurnCount <= input.toTurnCount ||
-      // @ts-expect-error upstream SchemaIssue type mismatch — runtime shape is correct
       new SchemaIssue.InvalidValue({
         message: "fromTurnCount must be less than or equal to toTurnCount",
-      } as unknown),
+      }),
     { identifier: "OrchestrationTurnDiffRange" },
   ),
 );
