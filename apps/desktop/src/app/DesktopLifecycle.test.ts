@@ -13,6 +13,7 @@ import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopTray from "./DesktopTray.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
@@ -77,6 +78,17 @@ function makeElectronWindowLayer(destroyAll: Effect.Effect<void> = Effect.void) 
   });
 }
 
+function makeDesktopTrayLayer(isRegistered = false) {
+  return Layer.succeed(DesktopTray.DesktopTray, {
+    register: Effect.void,
+    isRegistered: Effect.succeed(isRegistered),
+    updateRunningCount: () => Effect.void,
+    updateTooltip: () => Effect.void,
+    setAgentsPaused: () => Effect.void,
+    rebuildMenu: Effect.void,
+  });
+}
+
 function makeDesktopWindowLayer(
   input: {
     readonly activate?: Effect.Effect<void>;
@@ -116,6 +128,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),
+        Layer.provideMerge(makeDesktopTrayLayer()),
         Layer.provideMerge(DesktopAppSettings.layerTest()),
       );
 
@@ -147,12 +160,14 @@ describe("DesktopLifecycle", () => {
   }
 
   for (const testCase of [
-    { platform: "win32", closeToTray: true, expectQuit: false },
-    { platform: "win32", closeToTray: false, expectQuit: true },
-    { platform: "linux", closeToTray: true, expectQuit: true },
+    { platform: "win32", closeToTray: true, trayRegistered: true, expectQuit: false },
+    { platform: "win32", closeToTray: true, trayRegistered: false, expectQuit: true },
+    { platform: "win32", closeToTray: false, trayRegistered: true, expectQuit: true },
+    { platform: "linux", closeToTray: true, trayRegistered: false, expectQuit: true },
   ] satisfies ReadonlyArray<{
     platform: NodeJS.Platform;
     closeToTray: boolean;
+    trayRegistered: boolean;
     expectQuit: boolean;
   }>) {
     it.effect(
@@ -176,6 +191,7 @@ describe("DesktopLifecycle", () => {
             Layer.provideMerge(environmentLayer),
             Layer.provideMerge(DesktopShutdown.layer),
             Layer.provideMerge(DesktopState.layer),
+            Layer.provideMerge(makeDesktopTrayLayer(testCase.trayRegistered)),
             Layer.provideMerge(
               DesktopAppSettings.layerTest({
                 ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -243,6 +259,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(desktopShutdownLayer),
         Layer.provideMerge(DesktopState.layer),
+        Layer.provideMerge(makeDesktopTrayLayer()),
         Layer.provideMerge(DesktopAppSettings.layerTest()),
       );
 
@@ -285,6 +302,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),
+        Layer.provideMerge(makeDesktopTrayLayer()),
         Layer.provideMerge(DesktopAppSettings.layerTest()),
       );
 

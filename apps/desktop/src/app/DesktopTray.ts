@@ -4,11 +4,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import * as Schema from "effect/Schema";
 
-import * as FileSystem from "effect/FileSystem";
-
-import * as Electron from "electron";
+import type * as Electron from "electron";
 
 import * as DesktopAssets from "./DesktopAssets.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -20,23 +17,17 @@ import * as ElectronTray from "../electron/ElectronTray.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
-export class DesktopTrayError extends Schema.TaggedErrorClass<DesktopTrayError>()(
-  "DesktopTrayError",
-  {
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return "Failed to create the desktop system tray icon.";
-  }
-}
-
 export type DesktopTrayMenuAction = "show" | "settings" | "quit";
 
 export class DesktopTray extends Context.Service<
   DesktopTray,
   {
-    readonly register: Effect.Effect<void, DesktopTrayError, Scope.Scope>;
+    readonly register: Effect.Effect<
+      void,
+      DesktopAssets.DesktopAssetProbeError | ElectronTray.ElectronTrayCreateError,
+      Scope.Scope
+    >;
+    readonly isRegistered: Effect.Effect<boolean>;
     readonly updateRunningCount: (count: number) => Effect.Effect<void>;
     readonly updateTooltip: (tooltip: string) => Effect.Effect<void>;
     readonly setAgentsPaused: (paused: boolean) => Effect.Effect<void>;
@@ -111,7 +102,6 @@ export const make = Effect.gen(function* () {
   const shutdown = yield* DesktopShutdown.DesktopShutdown;
   const state = yield* DesktopState.DesktopState;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
-  const fileSystem = yield* FileSystem.FileSystem;
 
   // Electron callbacks (menu clicks, tray clicks) re-enter the Effect world;
   // run them with the captured fiber context so logging/tracing stay wired to
@@ -220,54 +210,11 @@ export const make = Effect.gen(function* () {
       return;
     }
 
-    const iconPaths = yield* assets.iconPaths;
-    const currentSettingsForIcon = yield* settings.get.pipe(
-      Effect.orElseSucceed(() => DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS),
+    const currentSettingsForIcon = yield* settings.get;
+    const preferredIconPath = yield* assets.resolveTrayIconPath(
+      currentSettingsForIcon.updateChannel,
     );
-    // Prefer ico on Windows, png elsewhere. Fall back to empty NativeImage if probing failed.
-    // For packaged builds iconPaths already holds the correct per-channel icon
-    // (nightly vs stable) via electron-builder resources. For unpacked dev,
-    // manually prefer the nightly icon when the update channel is nightly so
-    // the tray matches the nightly/stable branding the user sees in the window.
-    let preferredIconPath = Option.match(
-      Option.orElse(iconPaths.ico, () => iconPaths.png),
-      {
-        onNone: () => undefined as string | undefined,
-        onSome: (p) => p,
-      },
-    );
-    if (currentSettingsForIcon.updateChannel === "nightly") {
-      const nightlyCandidates = [
-        `${environment.rootDir}/assets/nightly/nightly-windows.ico`,
-        `${environment.rootDir}/assets/nightly/nightly-universal-1024.png`,
-      ];
-      for (const candidate of nightlyCandidates) {
-        const exists = yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false));
-        if (exists) {
-          preferredIconPath = candidate;
-          break;
-        }
-      }
-    }
-
-    let nativeIcon: Electron.NativeImage | string;
-    if (preferredIconPath !== undefined) {
-      try {
-        nativeIcon = Electron.nativeImage.createFromPath(preferredIconPath);
-        if ((nativeIcon as Electron.NativeImage).isEmpty?.()) {
-          nativeIcon = preferredIconPath;
-        }
-      } catch {
-        nativeIcon = preferredIconPath;
-      }
-    } else {
-      // Fallback: generate a 16x16 empty image; tray will still appear.
-      nativeIcon = Electron.nativeImage.createEmpty();
-    }
-
-    const tray = yield* electronTray
-      .create(nativeIcon)
-      .pipe(Effect.mapError((cause) => new DesktopTrayError({ cause })));
+    const tray = yield* electronTray.create(Option.getOrUndefined(preferredIconPath));
 
     yield* Ref.set(trayRef, Option.some(tray));
 
@@ -311,6 +258,7 @@ export const make = Effect.gen(function* () {
 
   return DesktopTray.of({
     register,
+    isRegistered: Ref.get(trayRef).pipe(Effect.map(Option.isSome)),
     updateRunningCount: (count) =>
       Effect.gen(function* () {
         const safeCount = Math.max(0, Math.floor(count));

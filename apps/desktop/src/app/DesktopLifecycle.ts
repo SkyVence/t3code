@@ -14,6 +14,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopTray from "./DesktopTray.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
@@ -40,10 +41,11 @@ export type DesktopLifecycleRuntimeServices =
 
 type DesktopLifecycleRegistrationServices =
   | DesktopLifecycleRuntimeServices
+  | DesktopTray.DesktopTray
   | ElectronWindow.ElectronWindow;
 
 /**
- * @effect-expect-leaking DesktopAppSettings | DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
+ * @effect-expect-leaking DesktopAppSettings | DesktopEnvironment | DesktopShutdown | DesktopState | DesktopTray | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
  */
 export class DesktopLifecycle extends Context.Service<
   DesktopLifecycle,
@@ -239,6 +241,7 @@ export const make = DesktopLifecycle.of({
           const app = yield* ElectronApp.ElectronApp;
           const state = yield* DesktopState.DesktopState;
           const settings = yield* DesktopAppSettings.DesktopAppSettings;
+          const tray = yield* DesktopTray.DesktopTray;
           if (environment.platform !== "darwin" && !(yield* Ref.get(state.quitting))) {
             // When background service (closeToTray) is enabled, keep the app alive
             // in the tray even after the last window closes — this is the
@@ -247,7 +250,11 @@ export const make = DesktopLifecycle.of({
             // window handlers destroy on close (DesktopWindow.shouldHideOnClose
             // is win32-gated), so suppressing quit would strand a windowless app.
             const currentSettings = yield* settings.get;
-            if (environment.platform === "win32" && currentSettings.closeToTray) {
+            if (
+              environment.platform === "win32" &&
+              currentSettings.closeToTray &&
+              (yield* tray.isRegistered)
+            ) {
               yield* logLifecycleInfo("window-all-closed suppressed by closeToTray");
               return;
             }

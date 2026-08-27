@@ -44,7 +44,8 @@ describe("DesktopAssets", () => {
         ),
       );
       const fileSystemLayer = FileSystem.layerNoop({
-        exists: (path) => Effect.succeed(String(path).includes("/assets/dev/")),
+        exists: (path) =>
+          Effect.succeed(String(path).replaceAll("\\", "/").includes("/assets/dev/")),
       });
       const assets = yield* DesktopAssets.DesktopAssets.pipe(
         Effect.provide(
@@ -56,9 +57,56 @@ describe("DesktopAssets", () => {
 
       const icons = yield* assets.iconPaths;
 
-      assert.match(Option.getOrThrow(icons.ico), /assets\/dev\/blueprint-windows\.ico$/);
-      assert.match(Option.getOrThrow(icons.png), /assets\/dev\/blueprint-universal-1024\.png$/);
+      assert.match(
+        Option.getOrThrow(icons.ico).replaceAll("\\", "/"),
+        /assets\/dev\/blueprint-windows\.ico$/,
+      );
+      assert.match(
+        Option.getOrThrow(icons.png).replaceAll("\\", "/"),
+        /assets\/dev\/blueprint-universal-1024\.png$/,
+      );
       assert.isTrue(Option.isNone(icons.icns));
+    }),
+  );
+
+  it.effect("prefers the unpackaged nightly tray icon", () =>
+    Effect.gen(function* () {
+      const developmentEnvironmentLayer = DesktopEnvironment.layer({
+        dirname: "/repo/apps/desktop/dist-electron",
+        homeDirectory: "/Users/alice",
+        platform: "win32",
+        processArch: "x64",
+        appVersion: "1.2.3",
+        appPath: "/repo",
+        isPackaged: false,
+        resourcesPath: "/repo/apps/desktop/resources",
+        runningUnderArm64Translation: false,
+      }).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            DesktopConfig.layerTest({ VITE_DEV_SERVER_URL: "http://localhost:5733" }),
+          ),
+        ),
+      );
+      const fileSystemLayer = FileSystem.layerNoop({
+        exists: (path) =>
+          Effect.succeed(String(path).replaceAll("\\", "/").includes("/assets/nightly/")),
+      });
+      const assets = yield* DesktopAssets.DesktopAssets.pipe(
+        Effect.provide(
+          DesktopAssets.layer.pipe(
+            Layer.provide(Layer.merge(fileSystemLayer, developmentEnvironmentLayer)),
+          ),
+        ),
+      );
+
+      const trayIconPath = yield* assets.resolveTrayIconPath("nightly");
+
+      assert.match(
+        Option.getOrThrow(trayIconPath).replaceAll("\\", "/"),
+        /assets\/nightly\/nightly-windows\.ico$/,
+      );
     }),
   );
 
@@ -74,7 +122,10 @@ describe("DesktopAssets", () => {
         description: "private filesystem diagnostic",
       });
       const fileSystemLayer = FileSystem.layerNoop({
-        exists: (path) => (path === candidatePath ? Effect.fail(cause) : Effect.succeed(false)),
+        exists: (path) =>
+          String(path).replaceAll("\\", "/") === candidatePath
+            ? Effect.fail(cause)
+            : Effect.succeed(false),
       });
       const assetsLayer = DesktopAssets.layer.pipe(
         Layer.provide(Layer.merge(fileSystemLayer, environmentLayer)),
@@ -85,10 +136,10 @@ describe("DesktopAssets", () => {
 
       assert.instanceOf(error, DesktopAssets.DesktopAssetProbeError);
       assert.equal(error.fileName, fileName);
-      assert.equal(error.candidatePath, candidatePath);
+      assert.equal(error.candidatePath.replaceAll("\\", "/"), candidatePath);
       assert.strictEqual(error.cause, cause);
       assert.equal(
-        error.message,
+        error.message.replaceAll("\\", "/"),
         `Failed to probe desktop asset "${fileName}" at ${candidatePath}.`,
       );
       assert.notInclude(error.message, "private filesystem diagnostic");

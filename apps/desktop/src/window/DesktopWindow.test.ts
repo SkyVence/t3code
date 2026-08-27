@@ -146,6 +146,7 @@ const desktopAssetsLayer = Layer.succeed(DesktopAssets.DesktopAssets, {
     icns: Option.none<string>(),
     png: Option.none<string>(),
   }),
+  resolveTrayIconPath: () => Effect.succeed(Option.none<string>()),
   resolveResourcePath: () => Effect.succeed(Option.none<string>()),
 } satisfies DesktopAssets.DesktopAssets["Service"]);
 

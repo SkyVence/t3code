@@ -289,6 +289,7 @@ export const make = Effect.gen(function* () {
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
+  const runSync = Effect.runSyncWith(context);
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
 
   const dismissConnectingSplash = Effect.gen(function* () {
@@ -595,32 +596,26 @@ export const make = Effect.gen(function* () {
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
-    // Tray background service: hide instead of destroying the window when
-    // closeToTray/minimizeToTray is enabled. The Effect refs are read
-    // synchronously via runSync here because the Electron close event must be
-    // cancelled synchronously — an async check would miss the preventDefault
-    // window. Both refs are pure SynchronizedRef/Ref reads with no service
-    // requirements, so runSync is safe. Quitting always bypasses the hide.
-    const shouldHideOnClose = (): boolean => {
+    // Electron requires the close decision synchronously so preventDefault can
+    // run before the native event returns. Re-enter the captured app runtime;
+    // if a settings read ever stops being synchronous, fail open and log it.
+    const shouldHideForTray = (setting: "closeToTray" | "minimizeToTray"): boolean => {
       try {
         if (environment.platform !== "win32") return false;
-        if (Effect.runSync(Ref.get(desktopState.quitting))) return false;
-        const settings = Effect.runSync(desktopSettings.get);
-        return settings.closeToTray;
-      } catch {
+        if (runSync(Ref.get(desktopState.quitting))) return false;
+        return runSync(desktopSettings.get)[setting];
+      } catch (cause) {
+        runFork(
+          logWindowWarning("failed to read tray setting synchronously", {
+            setting,
+            cause,
+          }),
+        );
         return false;
       }
     };
-    const shouldHideOnMinimize = (): boolean => {
-      try {
-        if (environment.platform !== "win32") return false;
-        if (Effect.runSync(Ref.get(desktopState.quitting))) return false;
-        const settings = Effect.runSync(desktopSettings.get);
-        return settings.minimizeToTray;
-      } catch {
-        return false;
-      }
-    };
+    const shouldHideOnClose = () => shouldHideForTray("closeToTray");
+    const shouldHideOnMinimize = () => shouldHideForTray("minimizeToTray");
     window.on("close", (event?: Electron.Event) => {
       if (shouldHideOnClose()) {
         event?.preventDefault();

@@ -76,6 +76,7 @@ const makeAssetsLayer = (png: Option.Option<string>) =>
       icns: Option.none(),
       png,
     }),
+    resolveTrayIconPath: () => Effect.succeed(Option.none()),
     resolveResourcePath: () => Effect.succeed(Option.none()),
   } satisfies DesktopAssets.DesktopAssets["Service"]);
 

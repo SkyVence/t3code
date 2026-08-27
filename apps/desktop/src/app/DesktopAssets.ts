@@ -1,3 +1,4 @@
+import type { DesktopUpdateChannel } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -30,6 +31,9 @@ export class DesktopAssets extends Context.Service<
   DesktopAssets,
   {
     readonly iconPaths: Effect.Effect<DesktopIconPaths>;
+    readonly resolveTrayIconPath: (
+      updateChannel: DesktopUpdateChannel,
+    ) => Effect.Effect<Option.Option<string>, DesktopAssetProbeError>;
     readonly resolveResourcePath: (
       fileName: string,
     ) => Effect.Effect<Option.Option<string>, DesktopAssetProbeError>;
@@ -90,6 +94,43 @@ function resolveSourceTreeIconPath(
   return environment.path.join(environment.rootDir, "assets", brand, fileName);
 }
 
+const resolveNightlyTrayIconPath = Effect.fn("desktop.assets.resolveNightlyTrayIconPath")(
+  function* (
+    updateChannel: DesktopUpdateChannel,
+  ): Effect.fn.Return<
+    Option.Option<string>,
+    DesktopAssetProbeError,
+    FileSystem.FileSystem | DesktopEnvironment.DesktopEnvironment
+  > {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    if (environment.isPackaged || updateChannel !== "nightly") {
+      return Option.none<string>();
+    }
+
+    for (const fileName of ["nightly-windows.ico", "nightly-universal-1024.png"] as const) {
+      const candidatePath = environment.path.join(
+        environment.rootDir,
+        "assets",
+        "nightly",
+        fileName,
+      );
+      const exists = yield* fileSystem
+        .exists(candidatePath)
+        .pipe(
+          Effect.mapError(
+            (cause) => new DesktopAssetProbeError({ fileName, candidatePath, cause }),
+          ),
+        );
+      if (exists) {
+        return Option.some(candidatePath);
+      }
+    }
+
+    return Option.none<string>();
+  },
+);
+
 const resolveIconPath = Effect.fn("desktop.assets.resolveIconPath")(function* (
   ext: keyof DesktopIconPaths,
 ): Effect.fn.Return<
@@ -131,6 +172,14 @@ export const make = Effect.gen(function* () {
 
   return DesktopAssets.of({
     iconPaths: Effect.succeed(iconPaths),
+    resolveTrayIconPath: Effect.fn("desktop.assets.resolveTrayIconPath")(function* (updateChannel) {
+      const nightlyIconPath = yield* resolveNightlyTrayIconPath(updateChannel).pipe(
+        Effect.provide(context),
+      );
+      return Option.isSome(nightlyIconPath)
+        ? nightlyIconPath
+        : Option.orElse(iconPaths.ico, () => iconPaths.png);
+    }),
     resolveResourcePath: Effect.fn("desktop.assets.resolveResourcePath.scoped")(
       function* (fileName) {
         return yield* resolveResourcePath(fileName).pipe(Effect.provide(context));

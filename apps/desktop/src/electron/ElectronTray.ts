@@ -2,7 +2,6 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
@@ -43,7 +42,7 @@ export class ElectronTray extends Context.Service<
   ElectronTray,
   {
     readonly create: (
-      icon: Electron.NativeImage | string,
+      iconPath: string | undefined,
     ) => Effect.Effect<Electron.Tray, ElectronTrayCreateError>;
     readonly setToolTip: (
       tray: Electron.Tray,
@@ -93,12 +92,18 @@ export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
 
   return ElectronTray.of({
-    create: (icon) =>
+    create: (iconPath) =>
       Effect.try({
-        try: () => new Electron.Tray(icon),
+        try: () => {
+          if (iconPath === undefined) {
+            return new Electron.Tray(Electron.nativeImage.createEmpty());
+          }
+          const nativeImage = Electron.nativeImage.createFromPath(iconPath);
+          return new Electron.Tray(nativeImage.isEmpty() ? iconPath : nativeImage);
+        },
         catch: (cause) =>
           new ElectronTrayCreateError({
-            iconPath: typeof icon === "string" ? icon : "NativeImage",
+            iconPath: iconPath ?? "NativeImage",
             cause,
           }),
       }),
