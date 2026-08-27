@@ -974,73 +974,6 @@ function BackgroundActivityAdvancedDialog({
   );
 }
 
-function DesktopTraySettings() {
-  const [traySettings, setTraySettings] = useState<{
-    closeToTray: boolean;
-    minimizeToTray: boolean;
-  } | null>(null);
-  const hasTrayBridge =
-    typeof window !== "undefined" && typeof window.desktopBridge?.getTraySettings === "function";
-
-  useEffect(() => {
-    if (!hasTrayBridge) return;
-    void window.desktopBridge
-      ?.getTraySettings?.()
-      .then((settings) => {
-        if (settings && typeof settings.closeToTray === "boolean") setTraySettings(settings);
-      })
-      .catch(() => undefined);
-  }, [hasTrayBridge]);
-
-  if (!hasTrayBridge) return null;
-
-  const closeToTray = traySettings?.closeToTray ?? true;
-  const minimizeToTray = traySettings?.minimizeToTray ?? false;
-
-  return (
-    <>
-      <SettingsSection title="Desktop">
-        <SettingsRow
-          title="Keep in system tray on close"
-          description="On Windows, closing the window hides T3 Code to the hidden icons (system tray) and keeps agents running. Disable to quit on close."
-          control={
-            <Switch
-              checked={closeToTray}
-              onCheckedChange={(checked) => {
-                const bridge = window.desktopBridge;
-                if (!bridge?.setCloseToTray) return;
-                void bridge
-                  .setCloseToTray(Boolean(checked))
-                  .then((next) => setTraySettings(next))
-                  .catch(() => undefined);
-              }}
-              aria-label="Keep in system tray on close"
-            />
-          }
-        />
-        <SettingsRow
-          title="Minimize to tray"
-          description="On Windows, minimizing also hides to the tray."
-          control={
-            <Switch
-              checked={minimizeToTray}
-              onCheckedChange={(checked) => {
-                const bridge = window.desktopBridge;
-                if (!bridge?.setMinimizeToTray) return;
-                void bridge
-                  .setMinimizeToTray(Boolean(checked))
-                  .then((next) => setTraySettings(next))
-                  .catch(() => undefined);
-              }}
-              aria-label="Minimize to tray"
-            />
-          }
-        />
-      </SettingsSection>
-    </>
-  );
-}
-
 export function AppearanceSettingsPanel() {
   const {
     appearanceMode,
@@ -2462,8 +2395,6 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
-
-        {isElectron ? <DesktopTraySettings /> : null}
 
         <SettingsRow
           {...searchableSetting("text-generation-model")}
