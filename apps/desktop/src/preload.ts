@@ -105,6 +105,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_CLOSE_TO_TRAY_CHANNEL, enabled),
   setMinimizeToTray: (enabled: boolean) =>
     ipcRenderer.invoke(IpcChannels.SET_MINIMIZE_TO_TRAY_CHANNEL, enabled),
+  setTrayRunningCount: (count: number) =>
+    ipcRenderer.invoke(IpcChannels.SET_TRAY_RUNNING_COUNT_CHANNEL, count),
   pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
   pickProjectFavicon: (initialPath) =>
     ipcRenderer.invoke(IpcChannels.PICK_PROJECT_FAVICON_CHANNEL, initialPath),

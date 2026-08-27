@@ -45,6 +45,7 @@ export const SET_WSL_ONLY_CHANNEL = "desktop:set-wsl-only";
 export const GET_TRAY_SETTINGS_CHANNEL = "desktop:get-tray-settings";
 export const SET_CLOSE_TO_TRAY_CHANNEL = "desktop:set-close-to-tray";
 export const SET_MINIMIZE_TO_TRAY_CHANNEL = "desktop:set-minimize-to-tray";
+export const SET_TRAY_RUNNING_COUNT_CHANNEL = "desktop:set-tray-running-count";
 export const SSH_PASSWORD_PROMPT_CANCELLED_RESULT = "ssh-password-prompt-cancelled";
 export const PREVIEW_CREATE_TAB_CHANNEL = "desktop:preview-create-tab";
 export const PREVIEW_CLOSE_TAB_CHANNEL = "desktop:preview-close-tab";

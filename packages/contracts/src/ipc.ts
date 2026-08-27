@@ -1150,6 +1150,7 @@ export interface DesktopBridge {
   setMinimizeToTray?: (
     enabled: boolean,
   ) => Promise<{ closeToTray: boolean; minimizeToTray: boolean }>;
+  setTrayRunningCount?: (count: number) => Promise<void>;
   /**
    * Desktop-only preview surface. Present iff the renderer is hosted by the
    * Electron desktop build; web builds have `preview === undefined`.
