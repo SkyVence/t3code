@@ -1,39 +1,71 @@
-import { useEffect, useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
+import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
+import type { EnvironmentId, OrchestrationThreadShell } from "@t3tools/contracts";
+import { Atom } from "effect/unstable/reactivity";
+import { useEffect } from "react";
 
-import { appAtomRegistry } from "../rpc/atomRegistry";
-import { useThreadRefs } from "../state/entities";
-import { environmentThreadDetails } from "../state/threads";
+import { environmentCatalog } from "../connection/catalog";
+import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import { environmentThreadShells } from "../state/threads";
 
 /**
- * Syncs the count of running agents/threads to the desktop tray (Windows).
+ * Count agents actively working on this machine: sessions in
+ * "starting"/"running" across the primary backend and any desktop-local
+ * secondary (e.g. the parallel WSL backend). Remote, SSH, and relay
+ * environments are excluded — the tray describes this machine only.
+ *
+ * Known limitation: background liveness (subagents or watch loops that
+ * outlive the turn) is not counted; the tray reads idle once the turn's
+ * session settles.
+ */
+export function countLocalRunningAgents(
+  entries: Iterable<readonly [EnvironmentId, ConnectionCatalogEntry]>,
+  threadsForEnvironment: (
+    environmentId: EnvironmentId,
+  ) => ReadonlyArray<Pick<OrchestrationThreadShell, "session">>,
+): number {
+  let count = 0;
+  for (const [environmentId, entry] of entries) {
+    const isLocal =
+      entry.target._tag === "PrimaryConnectionTarget" ||
+      isDesktopLocalConnectionTarget(entry.target);
+    if (!isLocal) continue;
+    for (const thread of threadsForEnvironment(environmentId)) {
+      const status = thread.session?.status;
+      if (status === "starting" || status === "running") count += 1;
+    }
+  }
+  return count;
+}
+
+// Derived from thread shells: the shell snapshot stream carries every
+// thread's session status, so the count stays live without opening
+// per-thread detail subscriptions (those stream full message payloads).
+const localRunningAgentCountAtom = Atom.make((get) =>
+  countLocalRunningAgents(get(environmentCatalog.catalogValueAtom).entries, (environmentId) =>
+    get(environmentThreadShells.environmentThreadsAtom(environmentId)),
+  ),
+).pipe(Atom.withLabel("tray-local-running-agent-count"));
+
+const DISABLED_COUNT_ATOM = Atom.make(0).pipe(Atom.withLabel("tray-local-running-agent-count:off"));
+
+// Resolved once at import time; the preload script injects the bridge before
+// app scripts run, so this never appears later. `undefined` on the web build.
+const setTrayRunningCount =
+  typeof window === "undefined" ? undefined : window.desktopBridge?.setTrayRunningCount;
+
+/**
+ * Syncs the count of running local agents to the desktop tray (Windows).
  * The tray shows "N agents running" in its header and tooltip.
  * No-op when not running inside Electron desktop.
  */
 export function useTrayRunningCountSync(): void {
-  const threadRefs = useThreadRefs();
-
-  const runningCount = useMemo(() => {
-    let count = 0;
-    for (const ref of threadRefs) {
-      const detailAtom = environmentThreadDetails.detailAtom(ref);
-      const detail = appAtomRegistry.get(detailAtom);
-      // detail.session?.status is the orchestration session status;
-      // "running" and "starting" are the active states (see
-      // shouldPersistThread in client-runtime/state/threads.ts).
-      const status = detail?.session?.status;
-      if (status === "running" || status === "starting") count += 1;
-    }
-    return count;
-  }, [threadRefs]);
+  const runningCount = useAtomValue(
+    setTrayRunningCount === undefined ? DISABLED_COUNT_ATOM : localRunningAgentCountAtom,
+  );
 
   useEffect(() => {
-    const bridge = (
-      window as unknown as {
-        desktopBridge?: { setTrayRunningCount?: (n: number) => Promise<void> };
-      }
-    ).desktopBridge;
-    if (!bridge?.setTrayRunningCount) return;
-    void bridge.setTrayRunningCount(runningCount).catch(() => undefined);
+    if (setTrayRunningCount === undefined) return;
+    void setTrayRunningCount(runningCount).catch(() => undefined);
   }, [runningCount]);
 }
