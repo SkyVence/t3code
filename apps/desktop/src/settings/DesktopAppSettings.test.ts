@@ -116,6 +116,8 @@ describe("DesktopSettings", () => {
         wslBackendEnabled: false,
         wslOnly: false,
         wslDistro: null,
+        closeToTray: true,
+        minimizeToTray: false,
       } satisfies DesktopAppSettings.DesktopSettings,
     );
   });
@@ -145,6 +147,8 @@ describe("DesktopSettings", () => {
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
+          closeToTray: true,
+          minimizeToTray: false,
         } satisfies DesktopAppSettings.DesktopSettings);
 
         const exposure = yield* settings.setServerExposureMode("local-only");
@@ -252,6 +256,8 @@ describe("DesktopSettings", () => {
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
+          closeToTray: true,
+          minimizeToTray: false,
         } satisfies DesktopAppSettings.DesktopSettings);
       }),
     ),
@@ -308,6 +314,8 @@ describe("DesktopSettings", () => {
             wslBackendEnabled: false,
             wslOnly: false,
             wslDistro: null,
+            closeToTray: true,
+            minimizeToTray: false,
           } satisfies DesktopAppSettings.DesktopSettings);
         }),
       ),
@@ -356,6 +364,8 @@ describe("DesktopSettings", () => {
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
+          closeToTray: true,
+          minimizeToTray: false,
         } satisfies DesktopAppSettings.DesktopSettings);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },
@@ -384,6 +394,8 @@ describe("DesktopSettings", () => {
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
+          closeToTray: true,
+          minimizeToTray: false,
         } satisfies DesktopAppSettings.DesktopSettings);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },
@@ -411,6 +423,8 @@ describe("DesktopSettings", () => {
           wslBackendEnabled: false,
           wslOnly: false,
           wslDistro: null,
+          closeToTray: true,
+          minimizeToTray: false,
         } satisfies DesktopAppSettings.DesktopSettings);
       }),
     ),

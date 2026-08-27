@@ -15,6 +15,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedErrorClass<DesktopLifecycleRelaunchError>()(
   "DesktopLifecycleRelaunchError",
@@ -34,7 +35,8 @@ export type DesktopLifecycleRuntimeServices =
   | DesktopState.DesktopState
   | DesktopWindow.DesktopWindow
   | ElectronApp.ElectronApp
-  | ElectronTheme.ElectronTheme;
+  | ElectronTheme.ElectronTheme
+  | DesktopAppSettings.DesktopAppSettings;
 
 type DesktopLifecycleRegistrationServices =
   | DesktopLifecycleRuntimeServices
@@ -236,7 +238,17 @@ export const make = DesktopLifecycle.of({
         Effect.gen(function* () {
           const app = yield* ElectronApp.ElectronApp;
           const state = yield* DesktopState.DesktopState;
+          const settings = yield* DesktopAppSettings.DesktopAppSettings;
           if (environment.platform !== "darwin" && !(yield* Ref.get(state.quitting))) {
+            // When background service (closeToTray) is enabled, keep the app alive
+            // in the tray even after the last window closes — this is the
+            // expected Windows hidden-icons behavior. Without it, closing the
+            // window would kill all running agents.
+            const currentSettings = yield* settings.get;
+            if (currentSettings.closeToTray) {
+              yield* logLifecycleInfo("window-all-closed suppressed by closeToTray");
+              return;
+            }
             yield* app.quit;
           }
         }).pipe(Effect.withSpan("desktop.lifecycle.windowAllClosed")),

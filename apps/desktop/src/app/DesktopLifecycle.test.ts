@@ -13,6 +13,7 @@ import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 function makeElectronAppLayer(
@@ -115,6 +116,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),
+        Layer.provideMerge(DesktopAppSettings.layerTest()),
       );
 
       return Effect.scoped(
@@ -185,6 +187,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(desktopShutdownLayer),
         Layer.provideMerge(DesktopState.layer),
+        Layer.provideMerge(DesktopAppSettings.layerTest()),
       );
 
       yield* Effect.scoped(
@@ -226,6 +229,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),
+        Layer.provideMerge(DesktopAppSettings.layerTest()),
       );
 
       yield* Effect.scoped(

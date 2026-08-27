@@ -13,6 +13,7 @@ import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
+import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
@@ -61,6 +62,7 @@ type DesktopWindowRuntimeServices =
   | DesktopAssets.DesktopAssets
   | DesktopAppSettings.DesktopAppSettings
   | DesktopClientSettings.DesktopClientSettings
+  | DesktopState.DesktopState
   | ElectronApp.ElectronApp
   | ElectronMenu.ElectronMenu
   | ElectronShell.ElectronShell
@@ -272,6 +274,7 @@ export const make = Effect.gen(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const previewManager = yield* PreviewManager.PreviewManager;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const desktopState = yield* DesktopState.DesktopState;
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const electronApp = yield* ElectronApp.ElectronApp;
   // Window-side latch for the primary backend's readiness. Set by
@@ -592,8 +595,48 @@ export const make = Effect.gen(function* () {
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
-    window.on("close", () => {
+    // Tray background service: hide instead of destroying the window when
+    // closeToTray/minimizeToTray is enabled. The Effect refs are read
+    // synchronously via runSync here because the Electron close event must be
+    // cancelled synchronously — an async check would miss the preventDefault
+    // window. Both refs are pure SynchronizedRef/Ref reads with no service
+    // requirements, so runSync is safe. Quitting always bypasses the hide.
+    const shouldHideOnClose = (): boolean => {
+      try {
+        if (environment.platform !== "win32") return false;
+        if (Effect.runSync(Ref.get(desktopState.quitting))) return false;
+        const settings = Effect.runSync(desktopSettings.get);
+        return settings.closeToTray;
+      } catch {
+        return false;
+      }
+    };
+    const shouldHideOnMinimize = (): boolean => {
+      try {
+        if (environment.platform !== "win32") return false;
+        if (Effect.runSync(Ref.get(desktopState.quitting))) return false;
+        const settings = Effect.runSync(desktopSettings.get);
+        return settings.minimizeToTray;
+      } catch {
+        return false;
+      }
+    };
+    window.on("close", (event?: Electron.Event) => {
+      if (shouldHideOnClose()) {
+        event?.preventDefault();
+        if (!window.isDestroyed()) window.hide();
+        void runPromise(
+          logWindowInfo("window hide to tray on close", { platform: environment.platform }),
+        );
+        return;
+      }
       runFork(flushBoundsPersist);
+    });
+    window.on("minimize", () => {
+      if (shouldHideOnMinimize()) {
+        if (!window.isDestroyed()) window.hide();
+        void runPromise(logWindowInfo("window hide to tray on minimize"));
+      }
     });
 
     if (environment.platform === "darwin") {

@@ -180,6 +180,7 @@ const desktopEnvironmentLayer = DesktopEnvironment.layer(environmentInput).pipe(
   Layer.provide(
     Layer.mergeAll(
       NodeServices.layer,
+      DesktopState.layer,
       DesktopConfig.layerTest({
         T3CODE_PORT: "3773",
         VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
@@ -236,6 +237,18 @@ function makeTestLayer(input: {
     setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
     setWslDistro: () => Effect.die("unexpected WSL distro change"),
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
+    setCloseToTray: () =>
+      Effect.succeed({
+        settings: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+        changed: false,
+      } as any),
+
+    setMinimizeToTray: () =>
+      Effect.succeed({
+        settings: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+        changed: false,
+      } as any),
+
     applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
     applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
@@ -369,6 +382,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
         Layer.mergeAll(
           desktopAssetsLayer,
           desktopEnvironmentLayer,
+          DesktopState.layer,
           DesktopAppSettings.layerTest(),
           desktopClientSettingsLayer,
           desktopServerExposureLayer,

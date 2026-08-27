@@ -48,6 +48,12 @@ export interface DesktopSettings {
   // this requires a desktop restart because the pool's primary spec is
   // chosen once at layer init.
   readonly wslOnly: boolean;
+  // When true, closing/minimizing the window keeps the app running in the
+  // system tray (Windows hidden icons) instead of quitting. The tray icon
+  // exposes show/settings/running-jobs/quit actions. Defaults to true on
+  // win32 so the background service stays alive after the UI is dismissed.
+  readonly closeToTray: boolean;
+  readonly minimizeToTray: boolean;
 }
 
 export interface DesktopSettingsChange {
@@ -84,6 +90,8 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   wslBackendEnabled: false,
   wslDistro: null,
   wslOnly: false,
+  closeToTray: true,
+  minimizeToTray: false,
 };
 
 const DesktopWindowBoundsDocument = Schema.Struct({
@@ -109,6 +117,8 @@ const DesktopSettingsDocument = Schema.Struct({
   wslMode: Schema.optionalKey(Schema.Literals(["local", "wsl"])),
   wslDistro: Schema.optionalKey(Schema.NullOr(Schema.String)),
   wslOnly: Schema.optionalKey(Schema.Boolean),
+  closeToTray: Schema.optionalKey(Schema.Boolean),
+  minimizeToTray: Schema.optionalKey(Schema.Boolean),
 });
 
 type DesktopSettingsDocument = typeof DesktopSettingsDocument.Type;
@@ -175,6 +185,12 @@ export class DesktopAppSettings extends Context.Service<
     readonly setWslOnly: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setCloseToTray: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setMinimizeToTray: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly applyWslWindowsFallback: Effect.Effect<
       DesktopSettingsChange,
       DesktopSettingsWriteError
@@ -238,6 +254,12 @@ function normalizeDesktopSettingsDocument(
     wslBackendEnabled,
     wslDistro: normalizeWslDistro(parsed.wslDistro),
     wslOnly: parsed.wslOnly === true,
+    closeToTray:
+      parsed.closeToTray === undefined ? defaultSettings.closeToTray : parsed.closeToTray === true,
+    minimizeToTray:
+      parsed.minimizeToTray === undefined
+        ? defaultSettings.minimizeToTray
+        : parsed.minimizeToTray === true,
   };
 }
 
@@ -279,6 +301,12 @@ function toDesktopSettingsDocument(
   }
   if (settings.wslOnly !== defaults.wslOnly) {
     document.wslOnly = settings.wslOnly;
+  }
+  if (settings.closeToTray !== defaults.closeToTray) {
+    document.closeToTray = settings.closeToTray;
+  }
+  if (settings.minimizeToTray !== defaults.minimizeToTray) {
+    document.minimizeToTray = settings.minimizeToTray;
   }
 
   return document;
@@ -367,6 +395,24 @@ function setWslOnly(settings: DesktopSettings, enabled: boolean): DesktopSetting
     : {
         ...settings,
         wslOnly: enabled,
+      };
+}
+
+function setCloseToTray(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.closeToTray === enabled
+    ? settings
+    : {
+        ...settings,
+        closeToTray: enabled,
+      };
+}
+
+function setMinimizeToTray(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.minimizeToTray === enabled
+    ? settings
+    : {
+        ...settings,
+        minimizeToTray: enabled,
       };
 }
 
@@ -544,6 +590,14 @@ export const make = Effect.gen(function* () {
       persist((settings) => setWslOnly(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setWslOnly", { attributes: { enabled } }),
       ),
+    setCloseToTray: (enabled) =>
+      persist((settings) => setCloseToTray(settings, enabled)).pipe(
+        Effect.withSpan("desktop.settings.setCloseToTray", { attributes: { enabled } }),
+      ),
+    setMinimizeToTray: (enabled) =>
+      persist((settings) => setMinimizeToTray(settings, enabled)).pipe(
+        Effect.withSpan("desktop.settings.setMinimizeToTray", { attributes: { enabled } }),
+      ),
     applyWslWindowsFallback: persist(applyWslWindowsFallback).pipe(
       Effect.withSpan("desktop.settings.applyWslWindowsFallback"),
     ),
@@ -585,6 +639,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
           update((settings) => setWslBackendEnabled(settings, enabled)),
         setWslDistro: (distro) => update((settings) => setWslDistro(settings, distro)),
         setWslOnly: (enabled) => update((settings) => setWslOnly(settings, enabled)),
+        setCloseToTray: (enabled) => update((settings) => setCloseToTray(settings, enabled)),
+        setMinimizeToTray: (enabled) => update((settings) => setMinimizeToTray(settings, enabled)),
         applyWslWindowsFallback: update(applyWslWindowsFallback),
         applyWslWindowsFallbackInMemory: update(applyWslWindowsFallback),
       });
