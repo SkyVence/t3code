@@ -28,8 +28,10 @@ import * as PlatformError from "effect/PlatformError";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { deepMerge } from "@t3tools/shared/Struct";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
+import { CommandAvailability, WindowsShellEnvironment } from "@t3tools/shared/shell";
 
 import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
@@ -47,6 +49,7 @@ import * as ServerConfig from "../../config.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
 import { readProviderStatusCache, resolveProviderStatusCachePath } from "../providerStatusCache.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
+import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
@@ -1149,6 +1152,174 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ]);
             }).pipe(Effect.provide(runtimeServices));
           }),
+      );
+
+      it.effect("rehydrates Windows PATH before manual provider refreshes", () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const codexDriver = ProviderDriverKind.make("codex");
+            const codexInstanceId = ProviderInstanceId.make("codex");
+            const installedCliDirectory = "C:\\Users\\tester\\AppData\\Local\\new-cli";
+            const hostEnvironment: NodeJS.ProcessEnv = {
+              PATH: "C:\\Windows\\System32",
+              PATHEXT: ".COM;.EXE;.BAT;.CMD",
+            };
+            const providerEnvironment = mergeProviderInstanceEnvironment(
+              [
+                {
+                  name: "CODEX_HOME",
+                  value: "C:\\Users\\tester\\.codex-work",
+                  sensitive: false,
+                },
+              ],
+              "win32",
+              hostEnvironment,
+            );
+            let cliInstalled = false;
+            let pathProbeCalls = 0;
+            let activeAvailabilityChecks = 0;
+            let maxActiveAvailabilityChecks = 0;
+            const missingProvider = {
+              instanceId: codexInstanceId,
+              driver: codexDriver,
+              status: "warning",
+              enabled: true,
+              installed: false,
+              auth: { status: "unknown" },
+              checkedAt: "2026-08-28T00:00:00.000Z",
+              version: null,
+              message: "Checking Codex provider status.",
+              models: [],
+              slashCommands: [],
+              skills: [],
+            } as const satisfies ServerProvider;
+            const readyProvider = {
+              instanceId: codexInstanceId,
+              driver: codexDriver,
+              status: "ready",
+              enabled: true,
+              installed: true,
+              auth: { status: "authenticated" },
+              checkedAt: "2026-08-28T00:01:00.000Z",
+              version: "1.0.0",
+              models: [],
+              slashCommands: [],
+              skills: [],
+            } as const satisfies ServerProvider;
+            const instance = {
+              instanceId: codexInstanceId,
+              driverKind: codexDriver,
+              continuationIdentity: {
+                driverKind: codexDriver,
+                continuationKey: "codex:instance:codex",
+              },
+              displayName: undefined,
+              enabled: true,
+              snapshot: {
+                maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: codexDriver,
+                  packageName: null,
+                }),
+                getSnapshot: Effect.succeed(missingProvider),
+                refresh: Effect.sync(() =>
+                  providerEnvironment.PATH?.split(";").includes(installedCliDirectory)
+                    ? readyProvider
+                    : missingProvider,
+                ),
+                streamChanges: Stream.empty,
+              },
+              adapter: {} as ProviderInstance["adapter"],
+              textGeneration: {} as ProviderInstance["textGeneration"],
+            } satisfies ProviderInstance;
+            const instanceRegistryLayer = Layer.succeed(
+              ProviderInstanceRegistry.ProviderInstanceRegistry,
+              {
+                getInstance: (instanceId) =>
+                  Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
+                listInstances: Effect.succeed([instance]),
+                listUnavailable: Effect.succeed([]),
+                streamChanges: Stream.empty,
+                subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+              },
+            );
+            const runtimeServices = yield* Layer.build(
+              ProviderRegistryLive.pipe(
+                Layer.provideMerge(instanceRegistryLayer),
+                Layer.provideMerge(
+                  ServerConfig.layerTest(process.cwd(), {
+                    prefix: "t3-provider-registry-windows-path-refresh-",
+                  }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+                Layer.provideMerge(Layer.succeed(HostProcessPlatform, "win32")),
+                Layer.provideMerge(Layer.succeed(HostProcessEnvironment, hostEnvironment)),
+                Layer.provideMerge(
+                  Layer.succeed(WindowsShellEnvironment, (names, options) => {
+                    if (!cliInstalled || options?.loadProfile || !names.includes("PATH")) {
+                      return {};
+                    }
+                    pathProbeCalls += 1;
+                    return { PATH: installedCliDirectory };
+                  }),
+                ),
+                Layer.provideMerge(
+                  Layer.succeed(CommandAvailability, () =>
+                    Effect.gen(function* () {
+                      activeAvailabilityChecks += 1;
+                      maxActiveAvailabilityChecks = Math.max(
+                        maxActiveAvailabilityChecks,
+                        activeAvailabilityChecks,
+                      );
+                      yield* Effect.yieldNow;
+                      activeAvailabilityChecks -= 1;
+                      return true;
+                    }),
+                  ),
+                ),
+              ),
+            );
+
+            yield* Effect.gen(function* () {
+              const registry = yield* ProviderRegistry.ProviderRegistry;
+              assert.strictEqual((yield* registry.getProviders)[0]?.installed, false);
+              assert.strictEqual(providerEnvironment.CODEX_HOME, "C:\\Users\\tester\\.codex-work");
+
+              cliInstalled = true;
+              const providers = yield* registry.refresh();
+
+              assert.strictEqual(pathProbeCalls, 1);
+              assert.strictEqual(hostEnvironment.PATH?.includes(installedCliDirectory), true);
+              assert.strictEqual(providers[0]?.installed, true);
+
+              hostEnvironment.PATH = "C:\\Windows\\System32";
+              pathProbeCalls = 0;
+              const kindProviders = yield* registry.refresh(codexDriver);
+
+              assert.strictEqual(pathProbeCalls, 1);
+              assert.strictEqual(hostEnvironment.PATH?.includes(installedCliDirectory), true);
+              assert.strictEqual(kindProviders[0]?.installed, true);
+
+              hostEnvironment.PATH = "C:\\Windows\\System32";
+              pathProbeCalls = 0;
+              const instanceProviders = yield* registry.refreshInstance(codexInstanceId);
+
+              assert.strictEqual(pathProbeCalls, 1);
+              assert.strictEqual(hostEnvironment.PATH?.includes(installedCliDirectory), true);
+              assert.strictEqual(instanceProviders[0]?.installed, true);
+
+              hostEnvironment.PATH = "C:\\Windows\\System32";
+              pathProbeCalls = 0;
+              maxActiveAvailabilityChecks = 0;
+              yield* Effect.all([registry.refresh(), registry.refreshInstance(codexInstanceId)], {
+                concurrency: "unbounded",
+                discard: true,
+              });
+
+              assert.strictEqual(pathProbeCalls, 2);
+              assert.strictEqual(maxActiveAvailabilityChecks, 1);
+            }).pipe(Effect.provide(runtimeServices));
+          }),
+        ),
       );
 
       it.effect("returns the cached provider list when a manual refresh fails", () =>

@@ -29,6 +29,7 @@ import {
   type ServerProvider,
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -41,6 +42,7 @@ import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 
 import { ServerConfig } from "../../config.ts";
+import { fixPath } from "../../os-jank.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
 import {
@@ -213,6 +215,17 @@ export const ProviderRegistryLive = Layer.effect(
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const platform = yield* HostProcessPlatform;
+    const windowsPathRefreshSemaphore = yield* Semaphore.make(1);
+    const refreshWindowsPath =
+      platform === "win32"
+        ? windowsPathRefreshSemaphore.withPermits(1)(
+            fixPath().pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            ),
+          )
+        : Effect.void;
 
     // Aggregator PubSub — consumers (WS gateway, etc.) subscribe here for
     // coalesced updates across every instance.
@@ -462,7 +475,11 @@ export const ProviderRegistryLive = Layer.effect(
     });
 
     const refreshAll = Effect.fn("refreshAll")(function* () {
+      yield* refreshWindowsPath;
       const sources = yield* getLiveSources;
+      if (sources.length === 0) {
+        return yield* Ref.get(providersRef);
+      }
       return yield* Effect.forEach(sources, (source) => refreshOneSource(source), {
         concurrency: "unbounded",
         discard: true,
@@ -473,6 +490,7 @@ export const ProviderRegistryLive = Layer.effect(
       if (provider === undefined) {
         return yield* refreshAll();
       }
+      yield* refreshWindowsPath;
       // Kind-scoped refreshes target the default instance for that driver.
       const defaultInstanceId = defaultInstanceIdForDriver(provider);
       const sources = yield* getLiveSources;
@@ -488,6 +506,7 @@ export const ProviderRegistryLive = Layer.effect(
     const refreshInstance = Effect.fn("refreshInstance")(function* (
       instanceId: ProviderInstanceId,
     ) {
+      yield* refreshWindowsPath;
       const sources = yield* getLiveSources;
       const providerSource = sources.find((candidate) => candidate.instanceId === instanceId);
       if (!providerSource) {
