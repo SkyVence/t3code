@@ -277,7 +277,7 @@ function buildWindowsEnvironmentCaptureCommand(
           ? [
               "$userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')",
               "$machinePath = [Environment]::GetEnvironmentVariable('PATH', 'Machine')",
-              '$value = if ($userPath -and $machinePath) { "$userPath;$machinePath" } elseif ($userPath) { $userPath } else { $machinePath }',
+              '$value = if ($userPath -and $machinePath) { "$machinePath;$userPath" } elseif ($userPath) { $userPath } else { $machinePath }',
             ]
           : [`$value = [Environment]::GetEnvironmentVariable('${name}')`];
 

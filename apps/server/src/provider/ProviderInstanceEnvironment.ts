@@ -3,7 +3,7 @@ import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 export function mergeProviderInstanceEnvironment(
   environment: ProviderInstanceEnvironment | undefined,
   platform: NodeJS.Platform,
-  baseEnv: NodeJS.ProcessEnv = process.env,
+  baseEnv: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   if (!environment || environment.length === 0) {
     return baseEnv;

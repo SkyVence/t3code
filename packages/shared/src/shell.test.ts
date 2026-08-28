@@ -242,7 +242,7 @@ describe("readEnvironmentFromWindowsShell", () => {
       "$machinePath = [Environment]::GetEnvironmentVariable('PATH', 'Machine')",
     );
     expect(command).toContain(
-      '$value = if ($userPath -and $machinePath) { "$userPath;$machinePath" } elseif ($userPath) { $userPath } else { $machinePath }',
+      '$value = if ($userPath -and $machinePath) { "$machinePath;$userPath" } elseif ($userPath) { $userPath } else { $machinePath }',
     );
   });
 
