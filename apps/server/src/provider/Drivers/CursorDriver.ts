@@ -154,11 +154,16 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         checkProvider,
         // Model catalog and capabilities come exclusively from Cursor's
         // list_available_models extension method during provider checks.
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
+        enrichSnapshot: ({
+          settings,
+          snapshot: currentSnapshot,
+          maintenanceCapabilities: currentMaintenanceCapabilities,
+          publishSnapshot,
+        }) =>
           enrichCursorSnapshot({
             settings: settings.provider,
             snapshot: currentSnapshot,
-            maintenanceCapabilities,
+            maintenanceCapabilities: currentMaintenanceCapabilities,
             enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
             publishSnapshot,
             stampIdentity,

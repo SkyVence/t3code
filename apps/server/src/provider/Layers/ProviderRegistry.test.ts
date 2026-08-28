@@ -52,7 +52,10 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import {
+  makeManualOnlyProviderMaintenanceCapabilities,
+  makeProviderMaintenanceCapabilities,
+} from "../providerMaintenance.ts";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -854,10 +857,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             displayName: undefined,
             enabled: true,
             snapshot: {
-              maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                provider: codexDriver,
-                packageName: null,
-              }),
+              getMaintenanceCapabilities: Effect.succeed(
+                makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: codexDriver,
+                  packageName: null,
+                }),
+              ),
               getSnapshot: Effect.succeed(initialProvider),
               refresh: Ref.update(refreshCalls, (count) => count + 1).pipe(
                 Effect.andThen(Effect.never),
@@ -945,10 +950,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             displayName: undefined,
             enabled: true,
             snapshot: {
-              maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                provider: cursorDriver,
-                packageName: null,
-              }),
+              getMaintenanceCapabilities: Effect.succeed(
+                makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: cursorDriver,
+                  packageName: null,
+                }),
+              ),
               getSnapshot: Effect.succeed(initialProvider),
               refresh: Effect.succeed(refreshedProvider),
               streamChanges: Stream.fromPubSub(changes),
@@ -1074,10 +1081,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               displayName: undefined,
               enabled: true,
               snapshot: {
-                maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: openCodeDriver,
-                  packageName: null,
-                }),
+                getMaintenanceCapabilities: Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: openCodeDriver,
+                    packageName: null,
+                  }),
+                ),
                 getSnapshot: Effect.succeed(initialProvider),
                 refresh: Effect.succeed(authoritativeProvider),
                 streamChanges: Stream.fromPubSub(changes),
@@ -1216,10 +1225,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               displayName: undefined,
               enabled: true,
               snapshot: {
-                maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: codexDriver,
-                  packageName: null,
-                }),
+                getMaintenanceCapabilities: Effect.sync(() =>
+                  makeProviderMaintenanceCapabilities({
+                    provider: codexDriver,
+                    packageName: "@openai/codex",
+                    updateExecutable: providerEnvironment.PATH?.includes(installedCliDirectory)
+                      ? "bun"
+                      : "npm",
+                    updateArgs: ["update"],
+                    updateLockKey: "codex-global",
+                  }),
+                ),
                 getSnapshot: Effect.succeed(missingProvider),
                 refresh: Effect.sync(() =>
                   providerEnvironment.PATH?.split(";").includes(installedCliDirectory)
@@ -1283,6 +1299,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               const registry = yield* ProviderRegistry.ProviderRegistry;
               assert.strictEqual((yield* registry.getProviders)[0]?.installed, false);
               assert.strictEqual(providerEnvironment.CODEX_HOME, "C:\\Users\\tester\\.codex-work");
+              assert.strictEqual(
+                (yield* registry.getProviderMaintenanceCapabilitiesForInstance(
+                  codexInstanceId,
+                  codexDriver,
+                )).update?.executable,
+                "npm",
+              );
 
               cliInstalled = true;
               const providers = yield* registry.refresh();
@@ -1290,6 +1313,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               assert.strictEqual(pathProbeCalls, 1);
               assert.strictEqual(hostEnvironment.PATH?.includes(installedCliDirectory), true);
               assert.strictEqual(providers[0]?.installed, true);
+              assert.strictEqual(
+                (yield* registry.getProviderMaintenanceCapabilitiesForInstance(
+                  codexInstanceId,
+                  codexDriver,
+                )).update?.executable,
+                "bun",
+              );
 
               hostEnvironment.PATH = "C:\\Windows\\System32";
               pathProbeCalls = 0;
@@ -1349,10 +1379,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             displayName: undefined,
             enabled: true,
             snapshot: {
-              maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                provider: codexDriver,
-                packageName: null,
-              }),
+              getMaintenanceCapabilities: Effect.succeed(
+                makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: codexDriver,
+                  packageName: null,
+                }),
+              ),
               getSnapshot: Effect.succeed(cachedProvider),
               refresh: Effect.die(new Error("simulated refresh failure")),
               streamChanges: Stream.empty,
@@ -1442,10 +1474,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             displayName: undefined,
             enabled: true,
             snapshot: {
-              maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                provider: provider.driver,
-                packageName: null,
-              }),
+              getMaintenanceCapabilities: Effect.succeed(
+                makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: provider.driver,
+                  packageName: null,
+                }),
+              ),
               getSnapshot: Effect.succeed(provider),
               refresh: Effect.succeed(provider),
               streamChanges: Stream.empty,
